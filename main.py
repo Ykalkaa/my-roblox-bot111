@@ -20,28 +20,30 @@ def get_advanced_info(u_id, cookies):
     adv = {"age": 0, "voice": "Нет ❌", "pending": 0, "email": "❌", "rap": 0}
     headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.roblox.com/"}
     try:
-        u_data = requests.get(f"https://users.roblox.com/v1/users/{u_id}", headers=headers).json()
+        u_data = requests.get(f"https://users.roblox.com/v1/users/{u_id}", headers=headers, timeout=5).json()
         created_dt = datetime.strptime(u_data['created'], "%Y-%m-%dT%H:%M:%S.%fZ")
         adv["age"] = (datetime.now() - created_dt).days
         
-        email_req = requests.get("https://accountsettings.roblox.com/v1/email", cookies=cookies, headers=headers).json()
+        email_req = requests.get("https://accountsettings.roblox.com/v1/email", cookies=cookies, headers=headers, timeout=5).json()
         if email_req.get('verified'): adv["email"] = "Да ✅"
         
-        voice_req = requests.get("https://voice.roblox.com/v1/settings/is-voice-enabled", cookies=cookies, headers=headers).json()
+        voice_req = requests.get("https://voice.roblox.com/v1/settings/is-voice-enabled", cookies=cookies, headers=headers, timeout=5).json()
         if voice_req.get('isVoiceEnabled'): adv["voice"] = "Да ✅"
 
-        summary = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/revenue/summary/30d", cookies=cookies, headers=headers).json()
+        summary = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/revenue/summary/30d", cookies=cookies, headers=headers, timeout=5).json()
         adv["pending"] = summary.get('pendingRobux', 0)
         
-        inv = requests.get(f"https://inventory.roblox.com/v1/users/{u_id}/assets/collectibles?assetType=All&sortOrder=Asc&limit=100", cookies=cookies, headers=headers).json()
+        inv = requests.get(f"https://inventory.roblox.com/v1/users/{u_id}/assets/collectibles?assetType=All&sortOrder=Asc&limit=100", cookies=cookies, headers=headers, timeout=5).json()
         adv["rap"] = sum(item.get('recentAveragePrice', 0) for item in inv.get('data', []))
     except: pass
     return adv
 
 def check_cookie(cookie):
     cookie = cookie.strip()
-    if "WARNING:" in cookie:
-        cookie = cookie.split("_|_")[-1] if "_|_" in cookie else cookie
+    # Очищаем только если есть явный мусор, но сохраняем структуру
+    if "_|_" in cookie:
+        cookie = cookie.split("_|_")[-1]
+    
     cookies = {".ROBLOSECURITY": cookie}
     try:
         u_req = requests.get("https://users.roblox.com/v1/users/authenticated", cookies=cookies, timeout=10)
@@ -78,39 +80,47 @@ def format_output(res):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "👋 Привет! Пришли мне куки текстом или файлом .txt")
+    bot.reply_to(message, "👋 Привет! Пришли куки текстом или файлом .txt")
 
 @bot.message_handler(content_types=['text', 'document'])
 def handle(message):
     try:
         if message.content_type == 'text':
-            if len(message.text) > 100: # Похоже на куки
-                res = check_cookie(message.text)
+            text = message.text.strip()
+            if len(text) > 100: # Если текст длинный — это куки
+                res = check_cookie(text)
                 if res['status'] == 'ok':
                     bot.send_message(message.chat.id, format_output(res), parse_mode="Markdown")
                 else:
-                    bot.send_message(message.chat.id, "❌ Куки невалиден или просрочен.")
+                    bot.send_message(message.chat.id, "❌ Куки невалиден.")
+            elif text.startswith('/'): # Если это команда
+                pass
             else:
-                bot.send_message(message.chat.id, "❓ Неизвестная команда. Просто пришли куки.")
+                bot.send_message(message.chat.id, "❓ Слишком короткий текст. Пришли полный куки.")
 
         elif message.content_type == 'document':
             file_info = bot.get_file(message.document.file_id)
-            lines = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore').splitlines()
-            bot.send_message(message.chat.id, f"⌛ Чек {len(lines)} строк...")
+            # Улучшенное чтение файла
+            content = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore')
+            lines = [l.strip() for l in content.splitlines() if l.strip()]
             
+            if not lines:
+                bot.send_message(message.chat.id, "❌ Файл пустой.")
+                return
+
+            bot.send_message(message.chat.id, f"⌛ Чек {len(lines)} строк...")
             results = []
             for l in lines:
-                if l.strip():
-                    res = check_cookie(l)
-                    if res['status'] == 'ok':
-                        results.append(format_output(res))
+                res = check_cookie(l)
+                if res['status'] == 'ok':
+                    results.append(format_output(res))
             
             if results:
                 buf = io.BytesIO("".join(results).encode('utf-8'))
                 buf.name = "results.txt"
                 bot.send_document(message.chat.id, buf)
             else:
-                bot.send_message(message.chat.id, "❌ В файле не найдено валидных аккаунтов.")
+                bot.send_message(message.chat.id, "❌ Валидных аккаунтов не найдено.")
     except Exception as e:
         print(f"Ошибка: {e}")
 
