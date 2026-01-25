@@ -1,6 +1,7 @@
 import telebot
 import requests
 import io
+import re
 from datetime import datetime
 from flask import Flask
 from threading import Thread
@@ -38,11 +39,17 @@ def get_advanced_info(u_id, cookies):
     except: pass
     return adv
 
-def check_cookie(cookie):
-    cookie = cookie.strip()
-    # Очищаем только если есть явный мусор, но сохраняем структуру
-    if "_|_" in cookie:
-        cookie = cookie.split("_|_")[-1]
+def extract_cookie(text):
+    """Вытаскивает чистый куки из строки с любым мусором"""
+    match = re.search(r"(_\|WARNING:-DO-NOT-SHARE-THIS\..+)", text)
+    if match:
+        return match.group(1).strip()
+    return None
+
+def check_cookie(raw_text):
+    cookie = extract_cookie(raw_text)
+    if not cookie:
+        return {"status": "invalid"}
     
     cookies = {".ROBLOSECURITY": cookie}
     try:
@@ -80,35 +87,26 @@ def format_output(res):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "👋 Привет! Пришли куки текстом или файлом .txt")
+    bot.reply_to(message, "👋 Привет! Пришли куки или .txt файл (даже если там есть лишний текст)")
 
 @bot.message_handler(content_types=['text', 'document'])
 def handle(message):
     try:
         if message.content_type == 'text':
-            text = message.text.strip()
-            if len(text) > 100: # Если текст длинный — это куки
-                res = check_cookie(text)
-                if res['status'] == 'ok':
-                    bot.send_message(message.chat.id, format_output(res), parse_mode="Markdown")
-                else:
-                    bot.send_message(message.chat.id, "❌ Куки невалиден.")
-            elif text.startswith('/'): # Если это команда
-                pass
+            res = check_cookie(message.text)
+            if res['status'] == 'ok':
+                bot.send_message(message.chat.id, format_output(res), parse_mode="Markdown")
+            elif len(message.text) > 50:
+                bot.send_message(message.chat.id, "❌ Куки не найден в тексте или он невалиден.")
             else:
-                bot.send_message(message.chat.id, "❓ Слишком короткий текст. Пришли полный куки.")
+                bot.send_message(message.chat.id, "❓ Пришли куки или файл.")
 
         elif message.content_type == 'document':
             file_info = bot.get_file(message.document.file_id)
-            # Улучшенное чтение файла
             content = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore')
             lines = [l.strip() for l in content.splitlines() if l.strip()]
             
-            if not lines:
-                bot.send_message(message.chat.id, "❌ Файл пустой.")
-                return
-
-            bot.send_message(message.chat.id, f"⌛ Чек {len(lines)} строк...")
+            bot.send_message(message.chat.id, f"⌛ Найдено {len(lines)} строк. Начинаю чистку и чек...")
             results = []
             for l in lines:
                 res = check_cookie(l)
@@ -120,7 +118,7 @@ def handle(message):
                 buf.name = "results.txt"
                 bot.send_document(message.chat.id, buf)
             else:
-                bot.send_message(message.chat.id, "❌ Валидных аккаунтов не найдено.")
+                bot.send_message(message.chat.id, "❌ Валидных куков внутри файла не обнаружено.")
     except Exception as e:
         print(f"Ошибка: {e}")
 
