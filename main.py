@@ -132,7 +132,7 @@ def start(message):
         "⚠️ _Бот работает 24/7 в облаке._"
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
-
+    
 @bot.message_handler(content_types=['text', 'document'])
 def handle(message):
     try:
@@ -154,3 +154,4 @@ if __name__ == '__main__':
     print("Бот и сервер запущены...")
 
     bot.infinity_polling()
+
