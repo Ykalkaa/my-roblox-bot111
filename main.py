@@ -28,34 +28,41 @@ GAME_DATA = {
 }
 
 def get_advanced_info(u_id, cookies):
-    """Сбор расширенных данных: Voice, Pending, RAP, Credit, Verification"""
     adv = {
         "age_days": 0, "voice": "Нет ❌", "pending": 0, 
         "credit": 0, "email_ver": "❌", "phone_ver": "❌", "rap": 0
     }
+    # Добавляем имитацию браузера
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.roblox.com/"
+    }
     try:
-        # 1. Возраст аккаунта
-        u_data = requests.get(f"https://users.roblox.com/v1/users/{u_id}").json()
+        # 1. Возраст
+        u_data = requests.get(f"https://users.roblox.com/v1/users/{u_id}", headers=headers).json()
         created_dt = datetime.strptime(u_data['created'], "%Y-%m-%dT%H:%M:%S.%fZ")
         adv["age_days"] = (datetime.now() - created_dt).days
         
-        # 2. Почта и Телефон (верификация)
-        set_req = requests.get("https://accountsettings.roblox.com/v1/email", cookies=cookies).json()
-        if set_req.get('verified'): adv["email_ver"] = "Да ✅"
+        # 2. Почта (используем другой эндпоинт)
+        email_req = requests.get("https://accountsettings.roblox.com/v1/email", cookies=cookies, headers=headers).json()
+        if email_req.get('verified'): 
+            adv["email_ver"] = "Да ✅"
         
-        # 3. Voice Chat
-        voice_req = requests.get("https://voice.roblox.com/v1/settings/is-voice-enabled", cookies=cookies).json()
-        if voice_req.get('isVoiceEnabled'): adv["voice"] = "Да ✅"
+        # 3. Voice Chat (улучшенный запрос)
+        voice_req = requests.get("https://voice.roblox.com/v1/settings/is-voice-enabled", cookies=cookies, headers=headers).json()
+        if voice_req.get('isVoiceEnabled') is True: 
+            adv["voice"] = "Да ✅"
 
-        # 4. Pending Robux и Credit Balance
-        summary = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/revenue/summary/30d", cookies=cookies).json()
+        # 4. Pending
+        summary = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/revenue/summary/30d", cookies=cookies, headers=headers).json()
         adv["pending"] = summary.get('pendingRobux', 0)
         
-        # 5. Collectibles (RAP)
-        inv = requests.get(f"https://inventory.roblox.com/v1/users/{u_id}/assets/collectibles?assetType=All&sortOrder=Asc&limit=100", cookies=cookies).json()
+        # 5. RAP
+        inv = requests.get(f"https://inventory.roblox.com/v1/users/{u_id}/assets/collectibles?assetType=All&sortOrder=Asc&limit=100", cookies=cookies, headers=headers).json()
         adv["rap"] = sum(item.get('recentAveragePrice', 0) for item in inv.get('data', []))
         
-    except: pass
+    except Exception as e:
+        print(f"Ошибка парсинга: {e}")
     return adv
 
 def get_recent_places(cookies):
@@ -139,3 +146,4 @@ def handle(message):
 if __name__ == '__main__':
     keep_alive()
     bot.infinity_polling()
+
