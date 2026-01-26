@@ -2,6 +2,7 @@ import telebot
 import requests
 import io
 import re
+import zipfile
 from datetime import datetime
 from flask import Flask
 from threading import Thread
@@ -46,7 +47,7 @@ def get_created_places(u_id):
         url = f"https://games.roblox.com/v2/users/{u_id}/games?accessFilter=Public&limit=10&sortOrder=Desc"
         res = requests.get(url, timeout=5).json()
         games = [g['name'] for g in res.get('data', [])]
-        return games # Возвращаем списком для статистики
+        return games
     except: return []
 
 def get_game_badges(u_id, universe_id, cookies):
@@ -125,18 +126,14 @@ def handle(message):
             lines = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore').splitlines()
             bot.send_message(message.chat.id, f"⌛ Чек {len(lines)} строк...")
             
-            all_results = []
             valid_data = []
-
             for l in lines:
                 if l.strip():
                     res = check_cookie(l)
-                    if res['status'] == 'ok':
-                        all_results.append(format_output(res))
-                        valid_data.append(res)
+                    if res['status'] == 'ok': valid_data.append(res)
 
             if valid_data:
-                # ГЕНЕРАЦИЯ СВОДКИ
+                # ГЕНЕРАЦИЯ СВОДКИ (ОСНОВНОЕ СООБЩЕНИЕ)
                 total_robux = sum(d['robux'] for d in valid_data)
                 best_friends = max(valid_data, key=lambda x: x['friends'])
                 oldest_acc = max(valid_data, key=lambda x: x['age'])
@@ -151,26 +148,43 @@ def handle(message):
                 stats += "🏆 ТОП ТРАТ ПО ИГРАМ:\n"
                 for g_id, g_info in GAME_DATA.items():
                     g_name = g_info['name']
-                    # Ищем того, кто больше всех потратил в конкретной игре
-                    top_spender = None
-                    max_spent = 0
+                    max_val, top_s = 0, None
                     for d in valid_data:
-                        current_spent = d['spent_dict'].get(g_name, {}).get('sum', 0)
-                        if current_spent > max_spent:
-                            max_spent = current_spent
-                            top_spender = d
+                        val = d['spent_dict'].get(g_name, {}).get('sum', 0)
+                        if val > max_val: max_val, top_s = val, d
+                    if top_s: stats += f"🥇 {g_name}: {top_s['name']} — {max_val} R$\n"
+
+                # ЛОГИКА ОТПРАВКИ ФАЙЛОВ
+                if len(valid_data) <= 10:
+                    # Обычный файл если мало аккаунтов
+                    buf = io.BytesIO("".join([format_output(d) for d in valid_data]).encode('utf-8'))
+                    buf.name = "results.txt"
+                    bot.send_document(message.chat.id, buf)
+                else:
+                    # ZIP АРХИВ если > 10 аккаунтов
+                    zip_buf = io.BytesIO()
+                    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                        # Категории
+                        files = {
+                            "robux.txt": [d for d in valid_data if d['robux'] > 0],
+                            "developers.txt": [d for d in valid_data if len(d['created_games']) > 0],
+                            "donators.txt": [d for d in valid_data if d['spent'] > 0],
+                            "old_accounts.txt": [d for d in valid_data if d['age'] > 365], # старше года
+                            "all_valid.txt": valid_data
+                        }
+                        for name, data in files.items():
+                            if data:
+                                content = "".join([format_output(d) for d in data])
+                                zip_file.writestr(name, content)
                     
-                    if top_spender:
-                        stats += f"🥇 {g_name}: {top_spender['name']} — {max_spent} R$\n"
-                
-                # Отправка файла и сводки
-                buf = io.BytesIO("".join(all_results).encode('utf-8'))
-                buf.name = "results.txt"
-                bot.send_document(message.chat.id, buf)
+                    zip_buf.seek(0)
+                    zip_buf.name = "checker_results.zip"
+                    bot.send_document(message.chat.id, zip_buf, caption="📦 Результаты разделены по категориям")
+
                 bot.send_message(message.chat.id, stats, parse_mode="Markdown")
             else:
                 bot.send_message(message.chat.id, "❌ Валид не найден.")
-    except Exception as e: print(e)
+    except Exception as e: print(f"Error in handle: {e}")
 
 if __name__ == '__main__':
     keep_alive()
