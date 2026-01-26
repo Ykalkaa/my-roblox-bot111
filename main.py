@@ -75,7 +75,7 @@ def check_cookie(raw_text):
         reg_date, age_days, premium, friends = get_extra_info(u_id)
         robux = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies).json().get('robux', 0)
         
-        # ПОЛУЧАЕМ СОЗДАННЫЕ ИГРЫ ВМЕСТО ПОСЛЕДНИХ
+        # Заменяем недавние игры на созданные
         created = get_created_places(u_id)
         
         # Траты
