@@ -28,6 +28,7 @@ GAME_DATA = {
 }
 
 def extract_cookie(text):
+    """Вытаскивает куки из строки"""
     match = re.search(r"(_\|WARNING:-DO-NOT-SHARE-THIS\..+)", text)
     return match.group(1).strip() if match else None
 
@@ -42,29 +43,13 @@ def get_extra_info(u_id):
     except: return "??", 0, "??", 0
 
 def get_created_places(u_id):
+    """Получает список публичных игр пользователя"""
     try:
         url = f"https://games.roblox.com/v2/users/{u_id}/games?accessFilter=Public&limit=10&sortOrder=Desc"
         res = requests.get(url, timeout=5).json()
         games = [g['name'] for g in res.get('data', [])]
         return "\n • " + "\n • ".join(games) if games else "Нет созданных игр"
     except: return "Скрыто"
-
-def get_pending_robux(u_id, cookies):
-    """Метод через мобильный API, он реже выдает 0 при наличии пендинга"""
-    try:
-        # Используем v2 и добавляем заголовки мобильного приложения
-        url = f"https://economy.roblox.com/v2/users/{u_id}/transaction-totals?timeFrame=Year&transactionType=summary"
-        headers = {
-            "User-Agent": "RobloxApp/5.1.0 (iPhone; iOS 15.0; Scale/2.0)",
-            "Accept": "application/json"
-        }
-        res = requests.get(url, cookies=cookies, headers=headers, timeout=5).json()
-        
-        # Если API вернуло данные, берем именно pendingRobux
-        return res.get('pendingRobux', 0)
-    except Exception as e:
-        print(f"Ошибка пендинга: {e}")
-        return 0
 
 def get_game_badges(u_id, universe_id, cookies):
     try:
@@ -85,14 +70,12 @@ def check_cookie(raw_text):
         u = u_req.json()
         u_id, u_name = u['id'], u['name']
         
+        # Инфо
         reg_date, age_days, premium, friends = get_extra_info(u_id)
-        robux_data = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies).json()
-        robux = robux_data.get('robux', 0)
-        
-        # Получаем пендинг
-        pending = get_pending_robux(u_id, cookies)
+        robux = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies).json().get('robux', 0)
         created = get_created_places(u_id)
         
+        # Траты
         sales = requests.get(f"https://economy.roblox.com/v2/users/{u_id}/transactions?transactionType=Purchase&limit=50", cookies=cookies).json()
         spent_details = {}
         total_spent = 0
@@ -111,19 +94,18 @@ def check_cookie(raw_text):
         details_text = "".join([f" • {n}: {d['sum']} R$ {d['badges']}\n" for n, d in spent_details.items()])
         
         return {
-            "status": "ok", "name": u_name, "id": u_id, "robux": robux, "pending": pending, "age": age_days,
+            "status": "ok", "name": u_name, "id": u_id, "robux": robux, "age": age_days,
             "reg_date": reg_date, "premium": premium, "friends": friends,
             "created_games": created, "details": details_text or "Трат нет\n", "spent": total_spent, "cookie": cookie
         }
     except: return {"status": "error"}
 
 def format_output(res):
-    # Теперь пишет пендинг ВСЕГДА, даже если он 0
     return (
         f"👤 Аккаунт: {res['name']} (ID: {res['id']})\n"
         f"🗓 Регистрация: {res['reg_date']} ({res['age']} дн.)\n"
         f"🌟 Premium: {res['premium']} | 👥 Друзья: {res['friends']}\n"
-        f"💰 Баланс: {res['robux']} R$ (Пендинг: {res['pending']} ⏳)\n\n"
+        f"💰 Баланс: {res['robux']} R$\n\n"
         f"🛠 СОЗДАННЫЕ ИГРЫ: {res['created_games']}\n\n"
         f"💸 ТРАТЫ:\n{res['details']}"
         f"--- Всего по списку: {res['spent']} R$ ---\n\n"
@@ -156,4 +138,3 @@ def handle(message):
 if __name__ == '__main__':
     keep_alive()
     bot.infinity_polling()
-
