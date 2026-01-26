@@ -50,12 +50,21 @@ def get_created_places(u_id):
     except: return "Скрыто"
 
 def get_pending_robux(u_id, cookies):
-    """Метод через revenue summary (видит даже мелкий пендинг)"""
+    """Метод через мобильный API, он реже выдает 0 при наличии пендинга"""
     try:
-        url = f"https://economy.roblox.com/v1/users/{u_id}/revenue/summary/30day"
-        res = requests.get(url, cookies=cookies, timeout=5).json()
+        # Используем v2 и добавляем заголовки мобильного приложения
+        url = f"https://economy.roblox.com/v2/users/{u_id}/transaction-totals?timeFrame=Year&transactionType=summary"
+        headers = {
+            "User-Agent": "RobloxApp/5.1.0 (iPhone; iOS 15.0; Scale/2.0)",
+            "Accept": "application/json"
+        }
+        res = requests.get(url, cookies=cookies, headers=headers, timeout=5).json()
+        
+        # Если API вернуло данные, берем именно pendingRobux
         return res.get('pendingRobux', 0)
-    except: return 0
+    except Exception as e:
+        print(f"Ошибка пендинга: {e}")
+        return 0
 
 def get_game_badges(u_id, universe_id, cookies):
     try:
@@ -147,3 +156,4 @@ def handle(message):
 if __name__ == '__main__':
     keep_alive()
     bot.infinity_polling()
+
