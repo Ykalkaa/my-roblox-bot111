@@ -45,11 +45,27 @@ def get_extra_info(u_id):
 
 def get_recent_places(cookies):
     try:
-        url = "https://games.roblox.com/v1/games/list?model.maxRows=10&model.pageContext.sortName=ContinueWatching"
-        res = requests.get(url, cookies=cookies, timeout=5).json()
-        games = [g['name'] for g in res.get('games', [])]
-        return "\n • " + "\n • ".join(games) if games else "Нет заходов"
-    except: return "Скрыто"
+        # Используем эндпоинт, который выводит именно историю последних посещенных плейсов
+        url = "https://www.roblox.com/places/recently-played-list"
+        # Для этого запроса важно передать заголовки, чтобы Roblox не принял нас за бота
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        res = requests.get(url, cookies=cookies, headers=headers, timeout=5)
+        
+        # Если первый метод не сработал, используем официальный API для 'Continue Watching' с правильным параметром
+        if res.status_code != 200:
+            url = "https://games.roblox.com/v1/games/list?model.pageContext.sortName=LastPlayed"
+            res = requests.get(url, cookies=cookies, headers=headers, timeout=5)
+            games = [g['name'] for g in res.json().get('games', [])]
+        else:
+            # Парсим названия игр из списка (обычно возвращает JSON с данными о местах)
+            data = res.json()
+            games = [g['name'] for g in data] if isinstance(data, list) else []
+
+        return "\n • " + "\n • ".join(games[:10]) if games else "Нет недавних заходов"
+    except:
+        return "Скрыто/Ошибка"
 
 def get_game_badges(u_id, universe_id, cookies):
     try:
@@ -139,3 +155,4 @@ def handle(message):
 if __name__ == '__main__':
     keep_alive()
     bot.infinity_polling()
+
